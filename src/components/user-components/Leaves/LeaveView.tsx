@@ -1,5 +1,5 @@
 "use client";
-import './LeaveView.css'
+import "./LeaveView.css";
 import * as React from "react";
 import {
   ColumnDef,
@@ -13,18 +13,9 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { MoreHorizontal } from "lucide-react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { Button } from "../../ui/button";
+import { Checkbox } from "../../ui/checkbox";
 import {
   Table,
   TableBody,
@@ -35,15 +26,15 @@ import {
 } from "@/components/ui/table";
 import newRequest from "@/utils/newRequest";
 import DeleteConfirmation from "../Misc-Pages/DeleteConfirmation";
-import LeaveForm from "./LeaveForm"; 
+import LeaveForm from "./LeaveForm";
 import { useData } from "@/components/context/DataProvider";
 import { useState, useEffect } from "react";
-import LoadingPage from "../Misc-Pages/Loading";
+import { Badge } from "../../ui/badge";
 
 export type LeaveRequest = {
   _id: string;
   applicant: {
-    _id: string; // Ensure applicant has an _id field
+    _id: string;
     name: string;
     email: string;
     role: string;
@@ -54,12 +45,16 @@ export type LeaveRequest = {
   reason: string;
   actualLeaveDays: number;
   substituteSuggestion: {
-    suggestedUser: string;
+    suggestedUser: {
+      _id: string;
+      name: string;
+    };
     suggestion: string;
   } | null;
   status: {
     hodApproval: { approved: boolean };
     principalApproval: { approved: boolean };
+    isApproved: boolean;
   };
 };
 
@@ -69,28 +64,29 @@ type User = {
   email: string;
   password: string;
   role: string;
-  department: number;
+  department: string;
 };
 
 const LeaveView = () => {
-  const queryClient = useQueryClient();
-  const [isModalOpen, setIsModalOpen] = React.useState(false);
-  const [modalMode, setModalMode] = React.useState<"create" | "update">("create");
-  const [leaveToEdit, setLeaveToEdit] = React.useState<LeaveRequest | null>(null);
-  const [leaveToDelete, setLeaveToDelete] = React.useState<string | null>(null);
-
-  const [showForm, setshowForm] = useState<boolean>(false);
+  const [isFormOpen, setIsFormOpen] = useState<boolean>(false);
   const [formMode, setFormMode] = useState<"create" | "update">("create");
-  const [selectedUser, setSelectedUser] = useState<Partial<User> | null>(null);
+  const [leaveToEdit, setLeaveToEdit] = useState<LeaveRequest | null>(null);
+  const [leaveToDelete, setLeaveToDelete] = useState<string | null>(null);
 
   const userId = localStorage.getItem("_id");
   const userRole = localStorage.getItem("role") || "";
   const userDepartment = localStorage.getItem("department");
 
-  const { data: leaves, isLoading, isError, refetchLeaves } = useQuery({
+  // Fetch leave requests
+  const {
+    data: leaves,
+    isLoading,
+    isError,
+    refetch: refetchLeaves,
+  } = useQuery({
     queryKey: ["leaves"],
     queryFn: async () => {
-      const response = await newRequest.get(`/leave/`);
+      const response = await newRequest.get("/leave");
       return response.data;
     },
   });
@@ -100,9 +96,13 @@ const LeaveView = () => {
     if (!leaves) return [];
 
     if (userRole === "teaching-staff" || userRole === "non-teaching-staff") {
-      return leaves.filter((leave: LeaveRequest) => leave.applicant._id === userId);
+      return leaves.filter(
+        (leave: LeaveRequest) => leave.applicant._id === userId
+      );
     } else if (userRole === "hod") {
-      return leaves.filter((leave: LeaveRequest) => leave.applicant.department === userDepartment);
+      return leaves.filter(
+        (leave: LeaveRequest) => leave.applicant.department === userDepartment
+      );
     } else if (userRole === "principal" || userRole === "director") {
       return leaves;
     } else {
@@ -117,17 +117,37 @@ const LeaveView = () => {
     return department ? department.name : "Unknown Department";
   };
 
+  // Updated toggleApproval mutation that properly toggles the approval status and updates overall approval
   const toggleApproval = useMutation({
     mutationFn: async ({
       id,
       role,
+      isApproved,
     }: {
       id: string;
       role: "hod" | "principal";
+      isApproved: boolean;
     }) => {
       const statusField = role === "hod" ? "hodApproval" : "principalApproval";
+
+      // Get current leave request to check both approvals for overall status update
+      const leaveResponse = await newRequest.get(`/leave/${id}`);
+      const leaveData = leaveResponse.data;
+
+      // Determine if both approvals would be true after this update
+      const hodApproved =
+        role === "hod" ? isApproved : leaveData.status.hodApproval.approved;
+      const principalApproved =
+        role === "principal"
+          ? isApproved
+          : leaveData.status.principalApproval.approved;
+
+      // Overall approval is true only if both hod and principal approve
+      const overallApproved = hodApproved && principalApproved;
+
       return newRequest.put(`/leave/${id}`, {
-        [`status.${statusField}.approved`]: true,
+        [`status.${statusField}.approved`]: isApproved,
+        "status.isApproved": overallApproved,
       });
     },
     onSuccess: () => {
@@ -144,10 +164,10 @@ const LeaveView = () => {
     },
   });
 
-  const openModal = (mode: "create" | "update", leave?: LeaveRequest) => {
-    setModalMode(mode);
+  const openForm = (mode: "create" | "update", leave?: LeaveRequest) => {
+    setFormMode(mode);
     setLeaveToEdit(leave || null);
-    setIsModalOpen(true);
+    setIsFormOpen(true);
   };
 
   const handleConfirmDelete = async () => {
@@ -161,6 +181,24 @@ const LeaveView = () => {
     } finally {
       setLeaveToDelete(null);
     }
+  };
+
+  // Check if the current user can approve as HOD
+  const canApproveAsHOD = (leave: LeaveRequest) => {
+    return userRole === "hod" && userDepartment === leave.applicant.department;
+  };
+
+  // Check if the current user can approve as Principal
+  const canApproveAsPrincipal = () => {
+    return userRole === "principal";
+  };
+
+  // Check overall approval status
+  const getOverallStatus = (leave: LeaveRequest) => {
+    return (
+      leave.status.hodApproval.approved &&
+      leave.status.principalApproval.approved
+    );
   };
 
   const columns: ColumnDef<LeaveRequest>[] = [
@@ -191,6 +229,14 @@ const LeaveView = () => {
     {
       accessorKey: "applicant.email",
       header: "Email",
+      cell: ({ row }) => (
+        <div
+          className="max-w-[200px] truncate"
+          title={row.original.applicant.email}
+        >
+          {row.original.applicant.email}
+        </div>
+      ),
     },
     {
       accessorKey: "applicant.role",
@@ -214,6 +260,11 @@ const LeaveView = () => {
     {
       accessorKey: "reason",
       header: "Reason",
+      cell: ({ row }) => (
+        <div className="max-w-[200px] truncate" title={row.original.reason}>
+          {row.original.reason}
+        </div>
+      ),
     },
     {
       accessorKey: "actualLeaveDays",
@@ -225,86 +276,154 @@ const LeaveView = () => {
       cell: ({ row }) => {
         const substitute = row.original.substituteSuggestion;
         return substitute ? (
-          <div className="p-2">
-            <p className="p-1">User:</p> {JSON.stringify(substitute.suggestedUser).name}
-            <br />
-            <>Suggestion:</> {JSON.stringify(substitute.suggestion)}
+          <div className="p-2 max-w-[200px]">
+            <p className="font-semibold">
+              User: {substitute.suggestedUser?.name || "N/A"}
+            </p>
+            <p className="truncate" title={substitute.suggestion}>
+              <span className="font-semibold">Note:</span>{" "}
+              {substitute.suggestion}
+            </p>
           </div>
         ) : (
-          <em>No suggestion provided</em>
+          <em>No substitute</em>
         );
       },
     },
     {
-      id: "principalApproval",
-      header: "Principal Approval",
-      cell: ({ row }: { row: any }) => (
-        userRole === "principal" ? (
-          <Button
-            variant="outline"
-            onClick={() =>
-              toggleApproval.mutate({
-                id: row.original._id,
-                role: "principal",
-                principalApproval: !row.original.status.principalApproval.approved,
-              })
-            }
-          >
-            {row.original.status.principalApproval.approved ? "Approved" : "Pending"}
-          </Button>
-        ) : (
-          <p>{row.original.status.principalApproval.approved ? "Approved" : "Pending"}</p>
-        )
+      id: "status",
+      header: "Status",
+      cell: ({ row }) => (
+        <Badge
+          className={
+            getOverallStatus(row.original) ? "bg-green-500" : "bg-yellow-500"
+          }
+        >
+          {getOverallStatus(row.original) ? "Approved" : "Pending"}
+        </Badge>
       ),
     },
     {
       id: "hodApproval",
       header: "HOD Approval",
-      cell: ({ row }) => (
-        userRole === "hod" ? (
+      cell: ({ row }) =>
+        canApproveAsHOD(row.original) ? (
           <Button
-            variant="outline"
-            onClick={() =>
-              toggleApproval.mutate({ id: row.original._id, role: "hod" })
+            variant={
+              row.original.status.hodApproval.approved ? "outline" : "default"
             }
-            disabled={row.original.status.hodApproval.approved}
+            onClick={() =>
+              toggleApproval.mutate({
+                id: row.original._id,
+                role: "hod",
+                isApproved: !row.original.status.hodApproval.approved,
+              })
+            }
+            className="w-full"
           >
-            {row.original.status.hodApproval.approved ? "Approved" : "Pending"}
+            {row.original.status.hodApproval.approved ? "Approved" : "Approve"}
           </Button>
         ) : (
-          <p>{row.original.status.hodApproval.approved ? "Approved" : "Pending"}</p>
-        )
-      ),
+          <Badge
+            variant={
+              row.original.status.hodApproval.approved ? "outline" : "secondary"
+            }
+          >
+            {row.original.status.hodApproval.approved ? "Approved" : "Pending"}
+          </Badge>
+        ),
+    },
+    {
+      id: "principalApproval",
+      header: "Principal Approval",
+      cell: ({ row }) =>
+        canApproveAsPrincipal() ? (
+          <Button
+            variant={
+              row.original.status.principalApproval.approved
+                ? "outline"
+                : "default"
+            }
+            onClick={() =>
+              toggleApproval.mutate({
+                id: row.original._id,
+                role: "principal",
+                isApproved: !row.original.status.principalApproval.approved,
+              })
+            }
+            className="w-full"
+          >
+            {row.original.status.principalApproval.approved
+              ? "Approved"
+              : "Approve"}
+          </Button>
+        ) : (
+          <Badge
+            variant={
+              row.original.status.principalApproval.approved
+                ? "outline"
+                : "secondary"
+            }
+          >
+            {row.original.status.principalApproval.approved
+              ? "Approved"
+              : "Pending"}
+          </Badge>
+        ),
     },
     {
       id: "actions",
       header: "Actions",
-      cell: ({ row }) => (
+      cell: ({ row }) =>
         (userRole === "teaching-staff" || userRole === "non-teaching-staff") &&
         row.original.applicant._id === userId && (
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-2">
             <Button
               variant="outline"
-              onClick={() => openModal("update", row.original)}
+              onClick={() => openForm("update", row.original)}
+              className="w-full"
+              size="sm"
             >
               Edit
             </Button>
             <Button
               variant="destructive"
               onClick={() => setLeaveToDelete(row.original._id)}
+              className="w-full"
+              size="sm"
             >
               Delete
             </Button>
           </div>
-        )
-      ),
+        ),
     },
   ];
 
   const [sorting, setSorting] = React.useState<SortingState>([]);
-  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
+  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>(
+    []
+  );
+  const [columnVisibility, setColumnVisibility] =
+    React.useState<VisibilityState>({
+      // Hide certain columns on mobile
+      "applicant.email": window.innerWidth > 768,
+      substituteSuggestion: window.innerWidth > 640,
+    });
   const [rowSelection, setRowSelection] = React.useState({});
+
+  // Update column visibility based on screen size
+  useEffect(() => {
+    const handleResize = () => {
+      setColumnVisibility({
+        "applicant.email": window.innerWidth > 768,
+        substituteSuggestion: window.innerWidth > 640,
+        reason: window.innerWidth > 480,
+      });
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   const table = useReactTable({
     data: filteredLeaves || [],
@@ -326,72 +445,116 @@ const LeaveView = () => {
   });
 
   const handleCloseForm = () => {
-    setshowForm(false);
-    setSelectedUser(null);
+    setIsFormOpen(false);
+    setLeaveToEdit(null);
+    refetchLeaves();
   };
 
   const handleCreate = () => {
     setFormMode("create");
-    setshowForm(true);
-    setSelectedUser(null);
+    setIsFormOpen(true);
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        Loading leaves...
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="text-red-500 text-center">
+        Error loading leave requests. Please try again.
+      </div>
+    );
+  }
 
   return (
     <>
-      <div className="flex flex-col gap-2 ">
-        <div className="flex justify-end mr-10">
-          <Button onClick={handleCreate}>Create new Leave</Button>
+      <div className="flex flex-col gap-4 p-4">
+        <div className="flex justify-between items-center">
+          <h2 className="text-2xl font-bold">Leave Requests</h2>
+          {(userRole === "teaching-staff" ||
+            userRole === "non-teaching-staff") && (
+            <Button onClick={handleCreate}>Create New Leave</Button>
+          )}
         </div>
-
-        <div className="rounded-md border overflow-x-auto overflow-y-auto max-h-[500px]">
-          <Table>
-            <TableHeader id='tableHeader'>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(header.column.columnDef.header, header.getContext())}
-                    </TableHead>
-                  ))}
-                </TableRow>
+       
+<div className="w-full overflow-hidden border rounded-lg mb-6">
+  <div className="h-[500px] overflow-y-auto overflow-x-auto">
+    <Table>
+      <TableHeader className="bg-slate-50 sticky top-0">
+        {table.getHeaderGroups().map((headerGroup) => (
+          <TableRow key={headerGroup.id}>
+            {headerGroup.headers.map((header) => (
+              <TableHead key={header.id} className="font-bold">
+                {header.isPlaceholder
+                  ? null
+                  : flexRender(header.column.columnDef.header, header.getContext())}
+              </TableHead>
+            ))}
+          </TableRow>
+        ))}
+      </TableHeader>
+      <TableBody>
+        {table.getRowModel().rows?.length ? (
+          table.getRowModel().rows.map((row) => (
+            <TableRow
+              key={row.id}
+              data-state={row.getIsSelected() && "selected"}
+              className="hover:bg-slate-50"
+            >
+              {row.getVisibleCells().map((cell) => (
+                <TableCell key={cell.id} className="py-2">
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </TableCell>
               ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows?.length ? (
-                table.getRowModel().rows.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    data-state={row.getIsSelected() && "selected"}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell
-                    colSpan={columns.length}
-                    className="h-24 text-center"
-                  >
-                    No leaves found.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+            </TableRow>
+          ))
+        ) : (
+          <TableRow>
+            <TableCell
+              colSpan={columns.length}
+              className="h-24 text-center"
+            >
+              No leaves found.
+            </TableCell>
+          </TableRow>
+        )}
+      </TableBody>
+    </Table>
+  </div>
+</div>
+
+        <div className="flex items-center justify-end space-x-2 py-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => table.previousPage()}
+            disabled={!table.getCanPreviousPage()}
+          >
+            Previous
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => table.nextPage()}
+            disabled={!table.getCanNextPage()}
+          >
+            Next
+          </Button>
         </div>
       </div>
 
-      {showForm && (
+      {isFormOpen && (
         <LeaveForm
           mode={formMode}
-          initialData={formMode === "update" ? selectedUser : undefined}
           onClose={handleCloseForm}
+          {...(formMode === "update" && leaveToEdit
+            ? { leave: leaveToEdit }
+            : {})}
         />
       )}
 
@@ -401,13 +564,6 @@ const LeaveView = () => {
         onConfirm={handleConfirmDelete}
         departmentName={""}
       />
-      {isModalOpen && (
-        <LeaveForm
-          mode={modalMode}
-          onClose={() => setIsModalOpen(false)}
-          {...(modalMode === "update" && leaveToEdit ? { leave: leaveToEdit } : {})}
-        />
-      )}
     </>
   );
 };
