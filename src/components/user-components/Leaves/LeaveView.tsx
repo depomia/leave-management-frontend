@@ -9,7 +9,6 @@ import {
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
-  getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
@@ -58,24 +57,40 @@ export type LeaveRequest = {
   };
 };
 
-type User = {
-  _id: string;
-  name: string;
-  email: string;
-  password: string;
-  role: string;
-  department: string;
-};
-
 const LeaveView = () => {
-  const [isFormOpen, setIsFormOpen] = useState<boolean>(false);
+  // State for the leave form and delete confirmation
+  const [isFormOpen, setIsFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<"create" | "update">("create");
   const [leaveToEdit, setLeaveToEdit] = useState<LeaveRequest | null>(null);
   const [leaveToDelete, setLeaveToDelete] = useState<string | null>(null);
-
+  
+  // Get user info from localStorage
   const userId = localStorage.getItem("_id");
   const userRole = localStorage.getItem("role") || "";
   const userDepartment = localStorage.getItem("department");
+
+  // Table state
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
+    "applicant.email": window.innerWidth > 768,
+    substituteSuggestion: window.innerWidth > 640,
+  });
+  const [rowSelection, setRowSelection] = useState({});
+
+  // Update column visibility based on screen size
+  useEffect(() => {
+    const handleResize = () => {
+      setColumnVisibility({
+        "applicant.email": window.innerWidth > 768,
+        substituteSuggestion: window.innerWidth > 640,
+        reason: window.innerWidth > 480,
+      });
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   // Fetch leave requests
   const {
@@ -91,33 +106,40 @@ const LeaveView = () => {
     },
   });
 
-  // Filter leaves based on user role and userId
+  // Access department data from context
+  const { departments } = useData();
+
+  // Get department name from ID
+  const getDepartmentName = (departmentId: string) => {
+    const department = departments?.find((dept) => dept._id.toString() === departmentId);
+    return department ? department.name : "Unknown Department";
+  };
+
+  // Filter leaves based on user role
   const filteredLeaves = React.useMemo(() => {
     if (!leaves) return [];
 
     if (userRole === "teaching-staff" || userRole === "non-teaching-staff") {
+      // Staff only see their own leaves
       return leaves.filter(
         (leave: LeaveRequest) => leave.applicant._id === userId
       );
     } else if (userRole === "hod") {
+      // HODs see departmental leaves AND their own leaves
       return leaves.filter(
-        (leave: LeaveRequest) => leave.applicant.department === userDepartment
+        (leave: LeaveRequest) => 
+          leave.applicant.department === userDepartment ||
+          leave.applicant._id === userId
       );
     } else if (userRole === "principal" || userRole === "director") {
+      // Principal/Director see all leaves
       return leaves;
     } else {
       return [];
     }
   }, [leaves, userRole, userDepartment, userId]);
 
-  const { departments } = useData();
-
-  const getDepartmentName = (dep: string) => {
-    const department = departments?.find((dept) => dept._id.toString() === dep);
-    return department ? department.name : "Unknown Department";
-  };
-
-  // Updated toggleApproval mutation that properly toggles the approval status and updates overall approval
+  // Toggle approval mutation
   const toggleApproval = useMutation({
     mutationFn: async ({
       id,
@@ -130,11 +152,11 @@ const LeaveView = () => {
     }) => {
       const statusField = role === "hod" ? "hodApproval" : "principalApproval";
 
-      // Get current leave request to check both approvals for overall status update
+      // Get current leave to check both approvals
       const leaveResponse = await newRequest.get(`/leave/${id}`);
       const leaveData = leaveResponse.data;
 
-      // Determine if both approvals would be true after this update
+      // Determine approval status after this update
       const hodApproved =
         role === "hod" ? isApproved : leaveData.status.hodApproval.approved;
       const principalApproved =
@@ -142,7 +164,7 @@ const LeaveView = () => {
           ? isApproved
           : leaveData.status.principalApproval.approved;
 
-      // Overall approval is true only if both hod and principal approve
+      // Overall approval requires both HOD and Principal approval
       const overallApproved = hodApproved && principalApproved;
 
       return newRequest.put(`/leave/${id}`, {
@@ -155,6 +177,7 @@ const LeaveView = () => {
     },
   });
 
+  // Delete leave mutation
   const deleteLeave = useMutation({
     mutationFn: async (id: string) => {
       await newRequest.delete(`/leave/${id}`);
@@ -164,12 +187,32 @@ const LeaveView = () => {
     },
   });
 
+  // Check if user can approve as HOD
+  const canApproveAsHOD = (leave: LeaveRequest) => {
+    return userRole === "hod" && userDepartment === leave.applicant.department;
+  };
+
+  // Check if user can approve as Principal
+  const canApproveAsPrincipal = () => {
+    return userRole === "principal";
+  };
+
+  // Check overall approval status
+  const getOverallStatus = (leave: LeaveRequest) => {
+    return (
+      leave.status.hodApproval.approved &&
+      leave.status.principalApproval.approved
+    );
+  };
+
+  // Open form for create/update
   const openForm = (mode: "create" | "update", leave?: LeaveRequest) => {
     setFormMode(mode);
     setLeaveToEdit(leave || null);
     setIsFormOpen(true);
   };
 
+  // Handle leave deletion
   const handleConfirmDelete = async () => {
     if (!leaveToDelete) return;
     try {
@@ -183,24 +226,20 @@ const LeaveView = () => {
     }
   };
 
-  // Check if the current user can approve as HOD
-  const canApproveAsHOD = (leave: LeaveRequest) => {
-    return userRole === "hod" && userDepartment === leave.applicant.department;
+  // Close form and refresh data
+  const handleCloseForm = () => {
+    setIsFormOpen(false);
+    setLeaveToEdit(null);
+    refetchLeaves();
   };
 
-  // Check if the current user can approve as Principal
-  const canApproveAsPrincipal = () => {
-    return userRole === "principal";
+  // Create new leave
+  const handleCreate = () => {
+    setFormMode("create");
+    setIsFormOpen(true);
   };
 
-  // Check overall approval status
-  const getOverallStatus = (leave: LeaveRequest) => {
-    return (
-      leave.status.hodApproval.approved &&
-      leave.status.principalApproval.approved
-    );
-  };
-
+  // Table column definitions
   const columns: ColumnDef<LeaveRequest>[] = [
     {
       id: "select",
@@ -375,7 +414,10 @@ const LeaveView = () => {
       id: "actions",
       header: "Actions",
       cell: ({ row }) =>
-        (userRole === "teaching-staff" || userRole === "non-teaching-staff") &&
+        // Allow teaching staff, non-teaching staff and HODs to manage their own leaves
+        (userRole === "teaching-staff" || 
+         userRole === "non-teaching-staff" || 
+         userRole === "hod") &&
         row.original.applicant._id === userId && (
           <div className="flex flex-col sm:flex-row gap-2">
             <Button
@@ -399,39 +441,13 @@ const LeaveView = () => {
     },
   ];
 
-  const [sorting, setSorting] = React.useState<SortingState>([]);
-  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>(
-    []
-  );
-  const [columnVisibility, setColumnVisibility] =
-    React.useState<VisibilityState>({
-      // Hide certain columns on mobile
-      "applicant.email": window.innerWidth > 768,
-      substituteSuggestion: window.innerWidth > 640,
-    });
-  const [rowSelection, setRowSelection] = React.useState({});
-
-  // Update column visibility based on screen size
-  useEffect(() => {
-    const handleResize = () => {
-      setColumnVisibility({
-        "applicant.email": window.innerWidth > 768,
-        substituteSuggestion: window.innerWidth > 640,
-        reason: window.innerWidth > 480,
-      });
-    };
-
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
+  // Initialize table
   const table = useReactTable({
     data: filteredLeaves || [],
     columns,
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     onColumnVisibilityChange: setColumnVisibility,
@@ -444,28 +460,19 @@ const LeaveView = () => {
     },
   });
 
-  const handleCloseForm = () => {
-    setIsFormOpen(false);
-    setLeaveToEdit(null);
-    refetchLeaves();
-  };
-
-  const handleCreate = () => {
-    setFormMode("create");
-    setIsFormOpen(true);
-  };
-
+  // Loading state
   if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
-        Loading leaves...
+        <div className="animate-pulse text-lg">Loading leaves...</div>
       </div>
     );
   }
 
+  // Error state
   if (isError) {
     return (
-      <div className="text-red-500 text-center">
+      <div className="text-red-500 text-center p-6">
         Error loading leave requests. Please try again.
       </div>
     );
@@ -474,88 +481,99 @@ const LeaveView = () => {
   return (
     <>
       <div className="flex flex-col gap-4 p-4">
-        <div className="flex justify-between items-center">
-          <h2 className="text-2xl font-bold">Leave Requests</h2>
-          {(userRole === "teaching-staff" ||
-            userRole === "non-teaching-staff") && (
-            <Button onClick={handleCreate}>Create New Leave</Button>
+        {/* Header with create button */}
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-2xl font-bold text-gray-800">Leave Requests</h2>
+          {/* Allow teaching staff, non-teaching staff and HODs to create leaves */}
+          {(userRole === "teaching-staff" || 
+            userRole === "non-teaching-staff" || 
+            userRole === "hod") && (
+            <Button 
+              onClick={handleCreate}
+              className="bg-black hover:bg-slate-800 text-white"
+            >
+              Create New Leave
+            </Button>
           )}
         </div>
-       
-<div className="w-full overflow-hidden border rounded-lg mb-6">
-  <div className="h-[500px] overflow-y-auto overflow-x-auto">
-    <Table>
-      <TableHeader className="bg-slate-50 sticky top-0">
-        {table.getHeaderGroups().map((headerGroup) => (
-          <TableRow key={headerGroup.id}>
-            {headerGroup.headers.map((header) => (
-              <TableHead key={header.id} className="font-bold">
-                {header.isPlaceholder
-                  ? null
-                  : flexRender(header.column.columnDef.header, header.getContext())}
-              </TableHead>
-            ))}
-          </TableRow>
-        ))}
-      </TableHeader>
-      <TableBody>
-        {table.getRowModel().rows?.length ? (
-          table.getRowModel().rows.map((row) => (
-            <TableRow
-              key={row.id}
-              data-state={row.getIsSelected() && "selected"}
-              className="hover:bg-slate-50"
-            >
-              {row.getVisibleCells().map((cell) => (
-                <TableCell key={cell.id} className="py-2">
-                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                </TableCell>
-              ))}
-            </TableRow>
-          ))
-        ) : (
-          <TableRow>
-            <TableCell
-              colSpan={columns.length}
-              className="h-24 text-center"
-            >
-              No leaves found.
-            </TableCell>
-          </TableRow>
-        )}
-      </TableBody>
-    </Table>
-  </div>
-</div>
-
-        <div className="flex items-center justify-end space-x-2 py-4">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
-          >
-            Previous
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
-          >
-            Next
-          </Button>
+        
+        {/* Table with scrollbar */}
+        <div className="w-full overflow-hidden border rounded-lg shadow-sm">
+          <div className="h-[500px] overflow-y-auto overflow-x-auto">
+            <Table>
+              {/* Sticky header */}
+              <TableHeader className="bg-slate-50 sticky top-0 ">
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableHead 
+                        key={header.id} 
+                        className="font-semibold text-gray-700 py-3"
+                        onClick={header.column.getToggleSortingHandler()}
+                      >
+                        {header.isPlaceholder
+                          ? null
+                          : (
+                            <div className="flex items-center gap-1">
+                              {flexRender(header.column.columnDef.header, header.getContext())}
+                              {{
+                                asc: " 🔼",
+                                desc: " 🔽",
+                              }[header.column.getIsSorted() as string] ?? null}
+                            </div>
+                          )}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHeader>
+              
+              {/* Table body */}
+              <TableBody>
+                {table.getRowModel().rows?.length ? (
+                  table.getRowModel().rows.map((row) => (
+                    <TableRow
+                      key={row.id}
+                      data-state={row.getIsSelected() && "selected"}
+                      className="hover:bg-slate-50 border-b"
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id} className="py-3">
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell
+                      colSpan={columns.length}
+                      className="h-24 text-center text-gray-500"
+                    >
+                      No leaves found.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+        
+        {/* Row count display */}
+        <div className="text-sm text-gray-500 mt-2">
+          Showing {table.getFilteredRowModel().rows.length} records
         </div>
       </div>
 
+      {/* Leave form modal */}
       {isFormOpen && (
-        <LeaveForm
-          mode={formMode}
-          onClose={handleCloseForm}
-          {...(formMode === "update" && leaveToEdit
-            ? { leave: leaveToEdit }
-            : {})}
-        />
+        <div className="z-50">
+          <LeaveForm
+            mode={formMode}
+            onClose={handleCloseForm}
+            {...(formMode === "update" && leaveToEdit ? { leave: leaveToEdit } : {})}
+          />
+        </div>
       )}
 
       <DeleteConfirmation

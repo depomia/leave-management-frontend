@@ -101,9 +101,7 @@ const user = role === "admin" ? data : dataAdmin;
       </SidebarContent>
       <SidebarFooter>
         <div className="flex gap-2 pb-3 justify-start ml-2 ">
-        <Copyright />
-        <p className="text-gray-300">2025</p>
-        <span className="ml-6 text-gray-300">MIT LICENSE</span>
+
         </div>
       </SidebarFooter>
       <SidebarRail />
