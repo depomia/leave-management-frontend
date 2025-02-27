@@ -12,6 +12,8 @@ const LoginForm: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [redirect, setRedirect] = useState<boolean>(false);
+  const [loadingData, setLoadingData] = useState<boolean>(false);
+  const [loadingProgress, setLoadingProgress] = useState<number>(0);
 
   const navigate = useNavigate();
 
@@ -24,6 +26,33 @@ const LoginForm: React.FC = () => {
       setRedirect(true);
     }
   }, []);
+
+  // Handle loading progress
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    
+    if (loadingData) {
+      interval = setInterval(() => {
+        setLoadingProgress((prev) => {
+          const newProgress = prev + (100 / 15); // Increase by ~6.67% per second
+          return newProgress > 100 ? 100 : newProgress;
+        });
+      }, 1000);
+      
+      // Set timeout for redirect after 15 seconds
+      const redirectTimeout = setTimeout(() => {
+        setLoadingData(false);
+        setRedirect(true);
+      }, 15000);
+      
+      return () => {
+        clearInterval(interval);
+        clearTimeout(redirectTimeout);
+      };
+    }
+    
+    return () => clearInterval(interval);
+  }, [loadingData]);
 
   function handleInputChange(e: ChangeEvent<HTMLInputElement>) {
     const { name, value } = e.target;
@@ -40,6 +69,8 @@ const LoginForm: React.FC = () => {
     try {
       const success = await newRequest.post("/auth/login", { email, password });
       const { name, role, _id, department } = success.data.user;
+      
+      // Store the user data in localStorage
       localStorage.setItem("user", JSON.stringify(name));
       localStorage.setItem("department", department);
       localStorage.setItem("role", role);
@@ -47,9 +78,12 @@ const LoginForm: React.FC = () => {
       localStorage.setItem("authenticated", "true");
       console.log("Login successful");
       
-      // Instead of navigating to a separate page, we'll set the redirect state
+      // Set current user and start loading screen instead of redirecting immediately
       setCurrentUser(role);
-      setRedirect(true);
+      setLoading(false);
+      setLoadingData(true);
+      setLoadingProgress(0);
+      
     } catch (error) {
       if (error instanceof AxiosError) {
         setError(error.response?.data?.message || "Invalid credentials");
@@ -58,7 +92,6 @@ const LoginForm: React.FC = () => {
         setError("Something went wrong. Please try again.");
         console.error("Unknown error");
       }
-    } finally {
       setLoading(false);
     }
   }
@@ -78,6 +111,44 @@ const LoginForm: React.FC = () => {
         localStorage.removeItem("authenticated");
         setRedirect(false);
     }
+  }
+
+  // Loading screen that shows for 15 seconds after successful login
+  if (loadingData) {
+    return (
+      <div className="fixed inset-0 bg-white bg-opacity-90 flex flex-col items-center justify-center z-50 px-4 sm:px-6">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.5 }}
+          className="text-center w-full max-w-md"
+        >
+          <h2 className="text-xl sm:text-2xl md:text-3xl font-bold mb-4 sm:mb-6 text-green-600">Preparing Your Dashboard</h2>
+          <div className="w-full sm:w-80 md:w-96 h-2 sm:h-3 bg-gray-200 rounded-full mb-4 overflow-hidden mx-auto">
+            <motion.div 
+              className="h-full bg-green-600 rounded-full"
+              style={{ width: `${loadingProgress}%` }}
+              initial={{ width: "0%" }}
+              animate={{ width: `${loadingProgress}%` }}
+              transition={{ duration: 0.5 }}
+            />
+          </div>
+          <p className="text-sm sm:text-base text-gray-600">
+            Loading your data... {Math.round(loadingProgress)}%
+          </p>
+          <div className="mt-6 sm:mt-8">
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+              className="w-10 h-10 sm:w-12 sm:h-12 border-3 sm:border-4 border-green-600 border-t-transparent rounded-full mx-auto"
+            />
+          </div>
+          <p className="text-xs sm:text-sm text-gray-500 mt-6 sm:mt-8">
+            Please wait while we prepare your experience
+          </p>
+        </motion.div>
+      </div>
+    );
   }
 
   return (
