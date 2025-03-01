@@ -12,7 +12,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import {
@@ -58,6 +58,9 @@ export type LeaveRequest = {
 };
 
 const LeaveView = () => {
+  // Add query client to trigger refreshes
+  const queryClient = useQueryClient();
+  
   // State for the leave form and delete confirmation
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<"create" | "update">("create");
@@ -92,7 +95,7 @@ const LeaveView = () => {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Fetch leave requests
+  // Fetch leave requests with more aggressive refetching
   const {
     data: leaves,
     isLoading,
@@ -104,6 +107,11 @@ const LeaveView = () => {
       const response = await newRequest.get("/leave");
       return response.data;
     },
+    // These settings ensure more frequent refreshes
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
+    refetchInterval: 30000, // Refetch every 30 seconds
+    staleTime: 15000, // Consider data stale after 15 seconds
   });
 
   // Access department data from context
@@ -111,25 +119,25 @@ const LeaveView = () => {
 
   // Get department name from ID
   const getDepartmentName = (departmentId: string) => {
-    const department = departments?.find((dept) => dept._id.toString() === departmentId);
+    const department = departments?.find((dept) => dept._id?.toString() === departmentId);
     return department ? department.name : "Unknown Department";
   };
 
-  // Filter leaves based on user role
+  // Filter leaves based on user role with null checks
   const filteredLeaves = React.useMemo(() => {
     if (!leaves) return [];
 
     if (userRole === "teaching-staff" || userRole === "non-teaching-staff") {
       // Staff only see their own leaves
       return leaves.filter(
-        (leave: LeaveRequest) => leave.applicant._id === userId
+        (leave: LeaveRequest) => leave.applicant && leave.applicant._id === userId
       );
     } else if (userRole === "hod") {
       // HODs see departmental leaves AND their own leaves
       return leaves.filter(
         (leave: LeaveRequest) => 
-          leave.applicant.department === userDepartment ||
-          leave.applicant._id === userId
+          (leave.applicant && leave.applicant.department === userDepartment) ||
+          (leave.applicant && leave.applicant._id === userId)
       );
     } else if (userRole === "principal" || userRole === "director") {
       // Principal/Director see all leaves
@@ -139,7 +147,7 @@ const LeaveView = () => {
     }
   }, [leaves, userRole, userDepartment, userId]);
 
-  // Toggle approval mutation
+  // Toggle approval mutation with invalidation
   const toggleApproval = useMutation({
     mutationFn: async ({
       id,
@@ -173,23 +181,29 @@ const LeaveView = () => {
       });
     },
     onSuccess: () => {
+      // Invalidate queries to trigger refresh
+      queryClient.invalidateQueries({ queryKey: ["leaves"] });
       refetchLeaves();
     },
   });
 
-  // Delete leave mutation
+  // Delete leave mutation with invalidation
   const deleteLeave = useMutation({
     mutationFn: async (id: string) => {
       await newRequest.delete(`/leave/${id}`);
     },
     onSuccess: () => {
+      // Invalidate queries to trigger refresh
+      queryClient.invalidateQueries({ queryKey: ["leaves"] });
       refetchLeaves();
     },
   });
 
-  // Check if user can approve as HOD
+  // Check if user can approve as HOD with null check
   const canApproveAsHOD = (leave: LeaveRequest) => {
-    return userRole === "hod" && userDepartment === leave.applicant.department;
+    return userRole === "hod" && 
+           leave.applicant && 
+           userDepartment === leave.applicant.department;
   };
 
   // Check if user can approve as Principal
@@ -230,6 +244,8 @@ const LeaveView = () => {
   const handleCloseForm = () => {
     setIsFormOpen(false);
     setLeaveToEdit(null);
+    // Force a refetch when the form closes
+    queryClient.invalidateQueries({ queryKey: ["leaves"] });
     refetchLeaves();
   };
 
@@ -238,6 +254,22 @@ const LeaveView = () => {
     setFormMode("create");
     setIsFormOpen(true);
   };
+
+  // Manually trigger refresh
+  const handleRefresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["leaves"] });
+    refetchLeaves();
+    window.location.reload();
+  };
+
+  // Set up automatic refresh on form state changes
+  useEffect(() => {
+    if (!isFormOpen) {
+      // When form closes, refresh data
+      queryClient.invalidateQueries({ queryKey: ["leaves"] });
+      refetchLeaves();
+    }
+  }, [isFormOpen, queryClient, refetchLeaves]);
 
   // Table column definitions
   const columns: ColumnDef<LeaveRequest>[] = [
@@ -264,27 +296,41 @@ const LeaveView = () => {
     {
       accessorKey: "applicant.name",
       header: "Name",
+      cell: ({ row }) => {
+        const applicant = row.original.applicant;
+        return applicant ? applicant.name : "Unknown";
+      }
     },
     {
       accessorKey: "applicant.email",
       header: "Email",
-      cell: ({ row }) => (
-        <div
-          className="max-w-[200px] truncate"
-          title={row.original.applicant.email}
-        >
-          {row.original.applicant.email}
-        </div>
-      ),
+      cell: ({ row }) => {
+        const applicant = row.original.applicant;
+        return applicant ? (
+          <div
+            className="max-w-[200px] truncate"
+            title={applicant.email}
+          >
+            {applicant.email}
+          </div>
+        ) : "Unknown";
+      }
     },
     {
       accessorKey: "applicant.role",
       header: "Role",
+      cell: ({ row }) => {
+        const applicant = row.original.applicant;
+        return applicant ? applicant.role : "Unknown";
+      }
     },
     {
       accessorKey: "applicant.department",
       header: "Department",
-      cell: ({ row }) => getDepartmentName(row.original.applicant.department),
+      cell: ({ row }) => {
+        const applicant = row.original.applicant;
+        return applicant ? getDepartmentName(applicant.department) : "Unknown";
+      }
     },
     {
       accessorKey: "fromDate",
@@ -317,7 +363,7 @@ const LeaveView = () => {
         return substitute ? (
           <div className="p-2 max-w-[200px]">
             <p className="font-semibold">
-              User: {substitute.suggestedUser?.name || "N/A"}
+              User: {substitute.suggestedUser ? substitute.suggestedUser.name || "N/A" : "N/A"}
             </p>
             <p className="truncate" title={substitute.suggestion}>
               <span className="font-semibold">Note:</span>{" "}
@@ -418,6 +464,7 @@ const LeaveView = () => {
         (userRole === "teaching-staff" || 
          userRole === "non-teaching-staff" || 
          userRole === "hod") &&
+        row.original.applicant && 
         row.original.applicant._id === userId && (
           <div className="flex flex-col sm:flex-row gap-2">
             <Button
@@ -481,20 +528,35 @@ const LeaveView = () => {
   return (
     <>
       <div className="flex flex-col gap-4 p-4">
-        {/* Header with create button */}
+        {/* Header with create and refresh buttons */}
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-2xl font-bold text-gray-800">Leave Requests</h2>
-          {/* Allow teaching staff, non-teaching staff and HODs to create leaves */}
-          {(userRole === "teaching-staff" || 
-            userRole === "non-teaching-staff" || 
-            userRole === "hod") && (
+          <div className="flex gap-2">
             <Button 
-              onClick={handleCreate}
-              className="bg-black hover:bg-slate-800 text-white"
+              onClick={handleRefresh}
+              variant="outline"
+              className="flex items-center gap-1"
             >
-              Create New Leave
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                <path d="M3 21v-5h5" />
+              </svg>
+              Refresh
             </Button>
-          )}
+            {/* Allow teaching staff, non-teaching staff and HODs to create leaves */}
+            {(userRole === "teaching-staff" || 
+              userRole === "non-teaching-staff" || 
+              userRole === "hod") && (
+              <Button 
+                onClick={handleCreate}
+                className="bg-black hover:bg-slate-800 text-white"
+              >
+                Create New Leave
+              </Button>
+            )}
+          </div>
         </div>
         
         {/* Table with scrollbar */}

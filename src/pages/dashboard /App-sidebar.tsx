@@ -35,7 +35,6 @@ const data = {
     name: user,
     email: role,
     avatar: PersonStanding,
-    department : department,
   },
   teams: [
     {

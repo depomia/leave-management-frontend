@@ -13,18 +13,6 @@ const HomePage = () => {
     navigate("/login");
   }
 
-  const text = `Streamline Your Employee Leave Management      System   `;
-  const textVariants = {
-    hidden: { opacity: 0 },
-    visible: (i: number) => ({
-      opacity: 1,
-      transition: {
-        delay: i * 0.05,
-        duration: 0.2,
-      },
-    }),
-  };
-
   return (
     <div className="w-full h-full overflow-hidden">
       <img
@@ -33,24 +21,10 @@ const HomePage = () => {
         className="absolute inset-0 w-full h-full object-cover brightness-75 -z-20"
       />
       <div className="container md:min-h-[700px] md:my-32 flex-col justify-center md:mx-44 overflow-hidden">
-        <div className="h-4/5 w-[800px] m-20 overflow-hidden ">
-          <h1 className="text-white font-bold text-8xl leading-tight text-left text-wrap">
-            {text.split("").map((char, index) => (
-              <m.span
-                key={index}
-                className="inline-block"
-                custom={index}
-                variants={textVariants}
-                initial="hidden"
-                animate="visible"
-              >
-                {char === " " ? "\u00A0" : char}
-              </m.span>
-            ))}
-          </h1>
-        </div>
-        <div className="ml-20"></div>
-        <div className="min-h-[700px] min-w-[500px] absolute right-40 top-40">
+        {/* Text section has been completely removed */}
+        
+        {/* Login form centered on the page */}
+        <div className="min-h-[700px] min-w-[500px] mx-auto flex items-center justify-center">
           <LoginForm />
         </div>
       </div>
@@ -59,5 +33,3 @@ const HomePage = () => {
 };
 
 export default HomePage;
-
-

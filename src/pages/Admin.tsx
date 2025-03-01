@@ -1,4 +1,4 @@
-import { AppSidebar } from "./dashboard /App-sidebar" 
+import  {AppSidebar}  from "./dashboard /App-sidebar" 
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/sidebar";
 import { NavUser } from "./nav-user";
 import { useLocation } from "react-router-dom"; // Import useLocation to get the current route
+import { useEffect } from "react";
 
 interface Props {
   children: React.ReactNode;
@@ -20,6 +21,13 @@ interface Props {
 
 const Page: React.FC<Props> = ({ children }) => {
   const location = useLocation(); // Get the current route
+
+  useEffect(() => {
+    if (!sessionStorage.getItem("reloaded")) {
+      window.location.reload();
+      sessionStorage.setItem("reloaded", "true");
+    }
+  }, []);
 
   return (
     <SidebarProvider>

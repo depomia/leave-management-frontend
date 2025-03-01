@@ -1,61 +1,47 @@
+// src/components/LoginForm.tsx
+
 import { useState, ChangeEvent, FormEvent, useEffect } from "react";
 import { motion } from "framer-motion";
-import newRequest from "@/utils/newRequest";
-import { AxiosError } from "axios";
-import { useNavigate, Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "../../context/ContextProvider";
+import { Navigate } from "react-router-dom";
 
 const LoginForm: React.FC = () => {
   const [email, setEmail] = useState<string>("");
   const [password, setPassword] = useState<string>("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [currentUser, setCurrentUser] = useState<string | null>(null);
-  const [redirect, setRedirect] = useState<boolean>(false);
-  const [loadingData, setLoadingData] = useState<boolean>(false);
   const [loadingProgress, setLoadingProgress] = useState<number>(0);
+  
+  // Use the auth context
+  const { login, error, loading, isAuthenticated, user, clearError } = useAuth();
 
-  const navigate = useNavigate();
-
-  // Check if user is already authenticated on component mount
-  useEffect(() => {
-    const isAuthenticated = localStorage.getItem("authenticated");
-    if (isAuthenticated === "true") {
-      const userRole = localStorage.getItem("role");
-      setCurrentUser(userRole);
-      setRedirect(true);
-    }
-  }, []);
-
-  // Handle loading progress
+  // Handle progress bar animation when loading
   useEffect(() => {
     let interval: NodeJS.Timeout;
     
-    if (loadingData) {
+    if (loading && loadingProgress < 100) {
       interval = setInterval(() => {
         setLoadingProgress((prev) => {
-          const newProgress = prev + (100 / 15); // Increase by ~6.67% per second
-          return newProgress > 100 ? 100 : newProgress;
+          const newProgress = prev + 5; // Adjust speed as needed
+          if (newProgress >= 100) {
+            return 100;
+          }
+          return newProgress;
         });
-      }, 1000);
-      
-      // Set timeout for redirect after 15 seconds
-      const redirectTimeout = setTimeout(() => {
-        setLoadingData(false);
-        setRedirect(true);
-      }, 15000);
-      
-      return () => {
-        clearInterval(interval);
-        clearTimeout(redirectTimeout);
-      };
+      }, 100);
     }
     
-    return () => clearInterval(interval);
-  }, [loadingData]);
+    // Clear interval after component unmounts
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [loading, loadingProgress]);
 
+  // Handle input changes
   function handleInputChange(e: ChangeEvent<HTMLInputElement>) {
     const { name, value } = e.target;
+    // Clear any previous errors when user starts typing
+    if (error) clearError();
+    
     if (name === "email") {
       setEmail(value);
     } else if (name === "password") {
@@ -63,58 +49,30 @@ const LoginForm: React.FC = () => {
     }
   }
 
+  // Handle form submission
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setLoading(true);
-    try {
-      const success = await newRequest.post("/auth/login", { email, password });
-      const { name, role, _id, department } = success.data.user;
-      
-      // Store the user data in localStorage
-      localStorage.setItem("user", JSON.stringify(name));
-      localStorage.setItem("department", department);
-      localStorage.setItem("role", role);
-      localStorage.setItem("_id", _id);
-      localStorage.setItem("authenticated", "true");
-      console.log("Login successful");
-      
-      // Set current user and start loading screen instead of redirecting immediately
-      setCurrentUser(role);
-      setLoading(false);
-      setLoadingData(true);
-      setLoadingProgress(0);
-      
-    } catch (error) {
-      if (error instanceof AxiosError) {
-        setError(error.response?.data?.message || "Invalid credentials");
-        console.error(error.response?.data);
-      } else {
-        setError("Something went wrong. Please try again.");
-        console.error("Unknown error");
-      }
-      setLoading(false);
-    }
+    setLoadingProgress(0);
+    await login(email, password);
   }
 
-  // Handle redirect based on user role
-  if (redirect) {
-    switch (currentUser) {
-      case "admin":
-        return <Navigate to="/admin" replace />;
-      case "hod":
-      case "principal":
-      case "non-teaching-staff":
-      case "teaching-staff":
-        return <Navigate to="/user" replace />;
-      default:
-        // If we somehow get here with invalid credentials, reset redirect state
-        localStorage.removeItem("authenticated");
-        setRedirect(false);
+  // Use useEffect for navigation to prevent render-time redirects
+  useEffect(() => {
+    if (isAuthenticated && user && !loading) {
+      const timer = setTimeout(() => {
+        if (user.role === "admin") {
+          window.location.href = "/admin";
+        } else {
+          window.location.href = "/user";
+        }
+      }, 500);
+      
+      return () => clearTimeout(timer);
     }
-  }
+  }, [isAuthenticated, user, loading]);
 
-  // Loading screen that shows for 15 seconds after successful login
-  if (loadingData) {
+  // Loading screen that shows during authentication
+  if (loading) {
     return (
       <div className="fixed inset-0 bg-white bg-opacity-90 flex flex-col items-center justify-center z-50 px-4 sm:px-6">
         <motion.div
@@ -159,9 +117,10 @@ const LoginForm: React.FC = () => {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: "easeOut" }}
       >
-        <h1 className="text-2xl font-semibold text-center text-black mb-5 md:mb-10">
-          Login to Your Account
+        <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-center text-black mb-8 md:mb-12" style={{ textShadow: "0 0 10px white", lineHeight: "1.5" }}>
+          LEAVE MANAGEMENT SYSTEM
         </h1>
+        
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <motion.input
             type="email"
